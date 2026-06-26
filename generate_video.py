@@ -11,7 +11,7 @@ from video_pipeline import (
     generate_video_with_video_model,
     load_env,
     output_path_from_url,
-    parse_video_prompt_segments,
+    parse_prompt_segments,
     parse_json_object,
     read_text_file,
     require_env,
@@ -82,21 +82,23 @@ def main() -> int:
     env = require_env("OPENAI_API_KEY", "VIDEO_API_URL", "VIDEO_MODEL")
     video_model = args.model or env["VIDEO_MODEL"]
     prompt_text = read_text_file(args.prompt_path, "视频提示词文件")
-    prompts = parse_video_prompt_segments(prompt_text)
-    if not prompts:
+    prompt_segments = [
+        segment for segment in parse_prompt_segments(prompt_text) if segment["video_prompt"]
+    ]
+    if not prompt_segments:
         raise RuntimeError(f"视频提示词文件没有可用段落: {args.prompt_path}")
 
     extra = parse_json_object(args.extra_json)
     payloads = [
         build_video_payload(
             video_model=video_model,
-            prompt=prompt,
+            prompt=segment["video_prompt"],
             negative_prompt=args.negative_prompt,
             size=args.size,
             duration=args.duration,
             extra=extra,
         )
-        for prompt in prompts
+        for segment in prompt_segments
     ]
 
     request_data = (
@@ -105,14 +107,18 @@ def main() -> int:
         else {
             "segment_duration": args.duration,
             "segments": [
-                {"index": index, "payload": payload}
+                {
+                    "index": index,
+                    "voiceover": prompt_segments[index - 1].get("voiceover", ""),
+                    "payload": payload,
+                }
                 for index, payload in enumerate(payloads, start=1)
             ],
         }
     )
     write_json_file(args.request_output, request_data)
     print(f"已保存视频请求 JSON: {args.request_output}")
-    print(f"共解析到 {len(prompts)} 段提示词，每段生成 {args.duration}s 视频")
+    print(f"共解析到 {len(prompt_segments)} 段提示词，每段生成 {args.duration}s 视频")
 
     if args.dry_run:
         print("dry run：未调用视频接口")

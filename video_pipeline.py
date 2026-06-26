@@ -7,29 +7,37 @@ from urllib.parse import urlparse
 import requests
 
 
-TEXT_SYSTEM_PROMPT = """你是宣传视频导演和文生视频提示词工程师。
-把用户提供的文字材料改写成多段可直接用于文生视频模型的中文提示词，每段生成 5 秒视频，后续会按顺序拼接成完整宣传片。
+TEXT_SYSTEM_PROMPT = """你是宣传视频导演、文生视频提示词工程师和广告配音文案。
+把用户提供的文字材料改写成多段可直接用于文生视频模型的中文提示词，并为每段生成对应配音稿。每段生成 5 秒视频，后续会按顺序拼接成完整宣传片。
 
 要求：
-1. 只输出分段提示词正文，不要解释、Markdown 或代码块。
+1. 只输出分段正文，不要解释、Markdown 或代码块。
 2. 保留材料里的品牌、产品、卖点、受众和传播意图。
 3. 根据材料长度、信息密度和卖点数量动态设计连续段落，不限制段落数量，不要为了控制段数而压缩重要信息。
 4. 按核心信息点自然分段：每个核心场景、卖点、转折、使用步骤或记忆点通常单独成段；材料很短时可以只生成少量段落，材料很长时可以生成更多段落。
 5. 每段都必须是一个独立、完整、适合生成 5 秒视频的文生视频提示词。
 6. 段落之间要有连续的叙事和视觉节奏：开场吸引、痛点或场景、产品能力、使用效果、收束记忆点。
 7. 每段补足画面、人物、动作、场景、光线、镜头运动、质感和节奏，避免依赖上一段才能理解。
-8. 成片感要像广告短片，不要像产品说明书。
-9. 避免字幕、水印、乱码文字、logo 变形、低清、畸形手部、多余肢体。
+8. 每段配音稿必须对应本段画面，适合 5 秒内自然读完，语气像广告旁白，简洁、有节奏，不要写舞台说明。
+9. 配音稿不要包含“旁白：”“镜头：”等标签，不要包含括号说明，不要要求屏幕显示文字。
+10. 成片感要像广告短片，不要像产品说明书。
+11. 避免字幕、水印、乱码文字、logo 变形、低清、畸形手部、多余肢体。
 
-输出格式必须严格如下，用分隔行标记每段：
+输出格式必须严格如下，用分隔行标记每段，每段都必须包含 VIDEO_PROMPT 和 VOICEOVER：
 === SEGMENT 1 ===
+VIDEO_PROMPT:
 第一段 5 秒视频提示词
+VOICEOVER:
+第一段 5 秒配音稿
 === SEGMENT 2 ===
+VIDEO_PROMPT:
 第二段 5 秒视频提示词
+VOICEOVER:
+第二段 5 秒配音稿
 """
 
 
-TEXT_USER_PROMPT_TEMPLATE = """请根据以下材料，生成多段宣传短视频的文生视频提示词。每段对应 5 秒视频，最终按顺序拼接。
+TEXT_USER_PROMPT_TEMPLATE = """请根据以下材料，生成多段宣传短视频的文生视频提示词和每段配音稿。每段对应 5 秒视频，最终按顺序拼接。
 
 材料：
 {material}
@@ -101,7 +109,11 @@ def write_json_file(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def parse_video_prompt_segments(prompt_text: str) -> list[str]:
+VIDEO_PROMPT_LABELS = {"VIDEO_PROMPT:", "视频提示词:"}
+VOICEOVER_LABELS = {"VOICEOVER:", "配音稿:"}
+
+
+def split_prompt_segment_texts(prompt_text: str) -> list[str]:
     segments = []
     current_lines = []
     saw_marker = False
@@ -127,6 +139,72 @@ def parse_video_prompt_segments(prompt_text: str) -> list[str]:
         prompt = prompt_text.strip()
         return [prompt] if prompt else []
     return segments
+
+
+def parse_prompt_segment(segment_text: str) -> dict[str, str]:
+    video_lines = []
+    voiceover_lines = []
+    current_field = "video_prompt"
+
+    for raw_line in segment_text.splitlines():
+        line = raw_line.strip()
+        normalized_line = line.upper().replace("：", ":")
+        if normalized_line in VIDEO_PROMPT_LABELS:
+            current_field = "video_prompt"
+            continue
+        if normalized_line in VOICEOVER_LABELS:
+            current_field = "voiceover"
+            continue
+
+        if current_field == "voiceover":
+            voiceover_lines.append(raw_line)
+        else:
+            video_lines.append(raw_line)
+
+    return {
+        "video_prompt": "\n".join(video_lines).strip(),
+        "voiceover": "\n".join(voiceover_lines).strip(),
+    }
+
+
+def parse_prompt_segments(prompt_text: str) -> list[dict[str, str]]:
+    parsed_segments = []
+    for segment_text in split_prompt_segment_texts(prompt_text):
+        segment = parse_prompt_segment(segment_text)
+        if segment["video_prompt"] or segment["voiceover"]:
+            parsed_segments.append(segment)
+    return parsed_segments
+
+
+def parse_video_prompt_segments(prompt_text: str) -> list[str]:
+    return [
+        segment["video_prompt"]
+        for segment in parse_prompt_segments(prompt_text)
+        if segment["video_prompt"]
+    ]
+
+
+def parse_voiceover_segments(prompt_text: str) -> list[str]:
+    return [
+        segment["voiceover"]
+        for segment in parse_prompt_segments(prompt_text)
+        if segment["voiceover"]
+    ]
+
+
+def parse_voiceover_file_segments(text: str) -> list[str]:
+    voiceovers = parse_voiceover_segments(text)
+    if voiceovers:
+        return voiceovers
+    return [segment.strip() for segment in split_prompt_segment_texts(text) if segment.strip()]
+
+
+def format_voiceover_segments(voiceovers: list[str]) -> str:
+    lines = []
+    for index, voiceover in enumerate(voiceovers, start=1):
+        lines.append(f"=== SEGMENT {index} ===")
+        lines.append(voiceover)
+    return "\n".join(lines)
 
 
 def generate_prompt_with_text_model(

@@ -3,8 +3,10 @@ import argparse
 from pathlib import Path
 
 from video_pipeline import (
+    format_voiceover_segments,
     generate_prompt_with_text_model,
     load_env,
+    parse_voiceover_segments,
     read_text_file,
     require_env,
     write_json_file,
@@ -31,6 +33,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="可选：保存文本模型原始 JSON 响应",
     )
+    parser.add_argument(
+        "--voiceover-output",
+        type=Path,
+        default=None,
+        help="可选：把每段配音稿单独保存到 txt，便于后续生成语音",
+    )
     return parser.parse_args()
 
 
@@ -53,6 +61,13 @@ def main() -> int:
 
     write_text_file(args.output, prompt)
     print(f"已生成视频提示词: {args.output}")
+
+    if args.voiceover_output:
+        voiceovers = parse_voiceover_segments(prompt)
+        if not voiceovers:
+            raise RuntimeError("文本模型返回内容中没有找到配音稿")
+        write_text_file(args.voiceover_output, format_voiceover_segments(voiceovers))
+        print(f"已保存配音稿: {args.voiceover_output}")
 
     if args.save_raw_response:
         write_json_file(args.save_raw_response, raw_response)
