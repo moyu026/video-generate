@@ -15,6 +15,8 @@ TEXT_API_URL=https://api.modelarts-maas.com/openai/v1
 TEXT_MODEL=kimi-k2.6
 VIDEO_API_URL=https://api.modelarts-maas.com/v1/video/generations
 VIDEO_MODEL=Wan2.2-T2V-A14B
+IMAGET_TO_VIDEO_API_URL=https://api.modelarts-maas.com/v1/video/generations
+IMAGET_TO_VIDEO_MODEL=Wan2.2-I2V-A14B
 ```
 
 安装 Python 依赖：
@@ -87,6 +89,27 @@ outputs/video_parts/segment_002.mp4
 ```
 
 旧的单段提示词 txt 仍会按原流程只生成一个 `outputs/video.mp4`。
+
+只让某一段使用参考图生成视频，例如第 6 段参考 logo 图片，其它段仍然使用文生视频：
+
+```bash
+python3 generate_video.py outputs/ai_meeting_prompt.txt \
+  --image-segment 6=assets/logo.png \
+  --request-output outputs/video_request.json \
+  --response-output outputs/video_response.json \
+  --output outputs/video.mp4
+```
+
+可以重复传入 `--image-segment`，让多段分别参考不同图片：
+
+```bash
+python3 generate_video.py outputs/ai_meeting_prompt.txt \
+  --image-segment 2=assets/product.png \
+  --image-segment 6=assets/logo.png \
+  --output outputs/video.mp4
+```
+
+指定的段落会继续使用提示词文件里对应的 `VIDEO_PROMPT`，只是改用 `.env` 中的图生视频模型，并把本地图片作为参考图传入。
 
 ## 3. 生成每段语音
 
