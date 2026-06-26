@@ -3,7 +3,7 @@ import argparse
 import time
 from pathlib import Path
 
-from video_project import (
+from video_pipeline import (
     DEFAULT_NEGATIVE_PROMPT,
     build_video_payload,
     download_file,
@@ -11,6 +11,7 @@ from video_project import (
     generate_video_with_video_model,
     load_env,
     output_path_from_url,
+    parse_video_prompt_segments,
     parse_json_object,
     read_text_file,
     require_env,
@@ -38,6 +39,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=None, help="覆盖 .env 中的 VIDEO_MODEL")
     parser.add_argument("--size", default="1280x720")
     parser.add_argument("--duration", type=int, default=5, help="视频时长；当前接口支持 3 或 5")
+    parser.add_argument(
+        "--parts-dir",
+        type=Path,
+        default=None,
+        help="多段提示词生成时的视频片段输出目录；默认使用 <output文件名>_parts",
+    )
     parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE_PROMPT)
     parser.add_argument(
         "--extra-json",
@@ -67,50 +74,100 @@ def main() -> int:
 
     env = require_env("OPENAI_API_KEY", "VIDEO_API_URL", "VIDEO_MODEL")
     video_model = args.model or env["VIDEO_MODEL"]
-    prompt = read_text_file(args.prompt_path, "视频提示词文件")
+    prompt_text = read_text_file(args.prompt_path, "视频提示词文件")
+    prompts = parse_video_prompt_segments(prompt_text)
+    if not prompts:
+        raise RuntimeError(f"视频提示词文件没有可用段落: {args.prompt_path}")
 
-    payload = build_video_payload(
-        video_model=video_model,
-        prompt=prompt,
-        negative_prompt=args.negative_prompt,
-        size=args.size,
-        duration=args.duration,
-        extra=parse_json_object(args.extra_json),
+    extra = parse_json_object(args.extra_json)
+    payloads = [
+        build_video_payload(
+            video_model=video_model,
+            prompt=prompt,
+            negative_prompt=args.negative_prompt,
+            size=args.size,
+            duration=args.duration,
+            extra=extra,
+        )
+        for prompt in prompts
+    ]
+
+    request_data = (
+        payloads[0]
+        if len(payloads) == 1
+        else {
+            "segment_duration": args.duration,
+            "segments": [
+                {"index": index, "payload": payload}
+                for index, payload in enumerate(payloads, start=1)
+            ],
+        }
     )
-    write_json_file(args.request_output, payload)
+    write_json_file(args.request_output, request_data)
     print(f"已保存视频请求 JSON: {args.request_output}")
+    print(f"共解析到 {len(prompts)} 段提示词，每段生成 {args.duration}s 视频")
 
     if args.dry_run:
         print("dry run：未调用视频接口")
         return 0
 
     started_at = time.time()
-    create_response = generate_video_with_video_model(
-        api_key=env["OPENAI_API_KEY"],
-        video_api_url=env["VIDEO_API_URL"],
-        payload=payload,
-        timeout=args.timeout,
-    )
-    task_id = create_response.get("task_id")
-    if not task_id:
-        raise RuntimeError(f"视频接口未返回 task_id: {create_response}")
 
-    print(f"视频任务 ID: {task_id}")
-    final_response = wait_for_video_result(
-        api_key=env["OPENAI_API_KEY"],
-        video_api_url=env["VIDEO_API_URL"],
-        task_id=task_id,
-        poll_interval=args.poll_interval,
-        max_wait=args.max_wait,
-        timeout=args.timeout,
+    final_responses = []
+    output_paths = []
+    parts_dir = args.parts_dir or args.output.with_suffix("").with_name(f"{args.output.stem}_parts")
+
+    for index, payload in enumerate(payloads, start=1):
+        print(f"开始生成第 {index}/{len(payloads)} 段")
+        create_response = generate_video_with_video_model(
+            api_key=env["OPENAI_API_KEY"],
+            video_api_url=env["VIDEO_API_URL"],
+            payload=payload,
+            timeout=args.timeout,
+        )
+        task_id = create_response.get("task_id")
+        if not task_id:
+            raise RuntimeError(f"视频接口未返回 task_id: {create_response}")
+
+        print(f"第 {index} 段视频任务 ID: {task_id}")
+        final_response = wait_for_video_result(
+            api_key=env["OPENAI_API_KEY"],
+            video_api_url=env["VIDEO_API_URL"],
+            task_id=task_id,
+            poll_interval=args.poll_interval,
+            max_wait=args.max_wait,
+            timeout=args.timeout,
+        )
+
+        result_url = extract_result_url(final_response)
+        fallback = args.output if len(payloads) == 1 else parts_dir / f"segment_{index:03d}.mp4"
+        output_path = output_path_from_url(result_url, fallback)
+        download_file(result_url, output_path, timeout=args.timeout)
+        output_paths.append(str(output_path))
+        final_responses.append(
+            {
+                "index": index,
+                "task_id": task_id,
+                "create_response": create_response,
+                "final_response": final_response,
+                "output_path": str(output_path),
+            }
+        )
+        print(f"已下载第 {index} 段视频文件: {output_path}")
+
+    response_data = (
+        final_responses[0]["final_response"]
+        if len(final_responses) == 1
+        else {"segments": final_responses, "output_paths": output_paths}
     )
-    write_json_file(args.response_output, final_response)
+    write_json_file(args.response_output, response_data)
     print(f"已保存最终任务响应: {args.response_output}")
 
-    result_url = extract_result_url(final_response)
-    output_path = output_path_from_url(result_url, args.output)
-    download_file(result_url, output_path, timeout=args.timeout)
-    print(f"已下载视频文件: {output_path}")
+    if len(output_paths) > 1:
+        print(f"视频片段目录: {parts_dir}")
+        print(f"可使用 combine_videos.py 合成: python3 combine_videos.py --input-dir {parts_dir} --output {args.output}")
+    else:
+        print(f"已下载视频文件: {output_paths[0]}")
     print(f"耗时: {time.time() - started_at:.1f}s")
     return 0
 

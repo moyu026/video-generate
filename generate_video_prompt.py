@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from video_project import (
+from video_pipeline import (
     generate_prompt_with_text_model,
     load_env,
     read_text_file,

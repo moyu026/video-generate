@@ -8,18 +8,27 @@ import requests
 
 
 TEXT_SYSTEM_PROMPT = """你是宣传视频导演和文生视频提示词工程师。
-把用户提供的文字材料改写成一条可直接用于文生视频模型的中文提示词。
+把用户提供的文字材料改写成多段可直接用于文生视频模型的中文提示词，每段生成 5 秒视频，后续会按顺序拼接成完整宣传片。
 
 要求：
-1. 只输出提示词正文，不要标题、解释、Markdown、分镜编号或代码块。
+1. 只输出分段提示词正文，不要解释、Markdown 或代码块。
 2. 保留材料里的品牌、产品、卖点、受众和传播意图。
-3. 补足画面、人物、动作、场景、光线、镜头运动、质感和节奏。
-4. 成片感要像广告短片，不要像产品说明书。
-5. 避免字幕、水印、乱码文字、logo 变形、低清、畸形手部、多余肢体。
+3. 根据材料信息量设计 2-5 个连续段落；信息很少时用 2 段，信息丰富时用 3-5 段。
+4. 每段都必须是一个独立、完整、适合生成 5 秒视频的文生视频提示词。
+5. 段落之间要有连续的叙事和视觉节奏：开场吸引、痛点或场景、产品能力、使用效果、收束记忆点。
+6. 每段补足画面、人物、动作、场景、光线、镜头运动、质感和节奏，避免依赖上一段才能理解。
+7. 成片感要像广告短片，不要像产品说明书。
+8. 避免字幕、水印、乱码文字、logo 变形、低清、畸形手部、多余肢体。
+
+输出格式必须严格如下，用分隔行标记每段：
+=== SEGMENT 1 ===
+第一段 5 秒视频提示词
+=== SEGMENT 2 ===
+第二段 5 秒视频提示词
 """
 
 
-TEXT_USER_PROMPT_TEMPLATE = """请根据以下材料，生成一条 8-12 秒宣传短视频的文生视频提示词。
+TEXT_USER_PROMPT_TEMPLATE = """请根据以下材料，生成多段宣传短视频的文生视频提示词。每段对应 5 秒视频，最终按顺序拼接。
 
 材料：
 {material}
@@ -89,6 +98,34 @@ def write_text_file(path: Path, text: str) -> None:
 def write_json_file(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def parse_video_prompt_segments(prompt_text: str) -> list[str]:
+    segments = []
+    current_lines = []
+    saw_marker = False
+
+    for raw_line in prompt_text.splitlines():
+        line = raw_line.strip()
+        if line.upper().startswith("=== SEGMENT ") and line.endswith("==="):
+            if saw_marker and current_lines:
+                segment = "\n".join(current_lines).strip()
+                if segment:
+                    segments.append(segment)
+            saw_marker = True
+            current_lines = []
+            continue
+        current_lines.append(raw_line)
+
+    if current_lines:
+        segment = "\n".join(current_lines).strip()
+        if segment:
+            segments.append(segment)
+
+    if not saw_marker:
+        prompt = prompt_text.strip()
+        return [prompt] if prompt else []
+    return segments
 
 
 def generate_prompt_with_text_model(
