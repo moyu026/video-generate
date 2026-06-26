@@ -17,6 +17,16 @@ VIDEO_API_URL=https://api.modelarts-maas.com/v1/video/generations
 VIDEO_MODEL=Wan2.2-T2V-A14B
 ```
 
+安装 Python 依赖：
+
+```bash
+pip install -r requirements.txt
+```
+
+如果需要 GPU 推理，建议按本机 CUDA 版本从 PyTorch 官方源安装对应的 `torch` 和 `torchaudio` wheel。
+
+合成视频需要系统中已安装 `ffmpeg`，并且命令行可直接执行 `ffmpeg`。
+
 ## 1. 生成视频提示词
 
 ```bash
@@ -79,12 +89,6 @@ outputs/video_parts/segment_002.mp4
 旧的单段提示词 txt 仍会按原流程只生成一个 `outputs/video.mp4`。
 
 ## 3. 生成每段语音
-
-先安装 OmniVoice：
-
-```bash
-pip install omnivoice soundfile
-```
 
 使用参考音频克隆同一个声音：
 
