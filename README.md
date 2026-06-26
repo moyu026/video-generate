@@ -30,7 +30,7 @@ python3 generate_video_prompt.py materials/material.txt \
 outputs/ai_meeting_prompt.txt
 ```
 
-提示词文件会使用以下格式分段，每段对应一个 5 秒视频：
+提示词文件会使用以下格式分段，每段对应一个 5 秒视频。段数不做硬性限制，会根据材料长度、信息密度和核心信息点动态决定。
 
 ```text
 === SEGMENT 1 ===
@@ -103,6 +103,23 @@ python3 generate_video.py outputs/ai_meeting_prompt.txt \
   --size 1280x720 \
   --duration 5 \
   --extra-json '{"seed":123}'
+```
+
+网络不稳定时增加下载重试：
+
+```bash
+python3 generate_video.py outputs/ai_meeting_prompt.txt \
+  --download-retries 5 \
+  --download-retry-interval 10
+```
+
+如果中途失败，保留已经下载好的片段后可跳过已有片段继续：
+
+```bash
+python3 generate_video.py outputs/ai_meeting_prompt.txt \
+  --skip-existing \
+  --download-retries 5 \
+  --download-retry-interval 10
 ```
 
 指定片段输出目录：

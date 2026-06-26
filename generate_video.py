@@ -52,6 +52,13 @@ def parse_args() -> argparse.Namespace:
         help='额外合并到视频请求体的 JSON object，例如 \'{"seed":123}\'',
     )
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--download-retries", type=int, default=3, help="下载视频失败时的重试次数")
+    parser.add_argument("--download-retry-interval", type=int, default=5, help="下载重试间隔秒数")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="多段生成时跳过已存在且非空的片段文件，便于失败后继续生成",
+    )
     parser.add_argument("--poll-interval", type=int, default=10, help="轮询任务状态间隔秒数")
     parser.add_argument("--max-wait", type=int, default=1800, help="最长等待视频生成秒数")
     parser.add_argument(
@@ -118,6 +125,12 @@ def main() -> int:
     parts_dir = args.parts_dir or args.output.with_suffix("").with_name(f"{args.output.stem}_parts")
 
     for index, payload in enumerate(payloads, start=1):
+        fallback = args.output if len(payloads) == 1 else parts_dir / f"segment_{index:03d}.mp4"
+        if len(payloads) > 1 and args.skip_existing and fallback.exists() and fallback.stat().st_size > 0:
+            output_paths.append(str(fallback))
+            print(f"第 {index}/{len(payloads)} 段已存在，跳过: {fallback}")
+            continue
+
         print(f"开始生成第 {index}/{len(payloads)} 段")
         create_response = generate_video_with_video_model(
             api_key=env["OPENAI_API_KEY"],
@@ -140,10 +153,7 @@ def main() -> int:
         )
 
         result_url = extract_result_url(final_response)
-        fallback = args.output if len(payloads) == 1 else parts_dir / f"segment_{index:03d}.mp4"
         output_path = output_path_from_url(result_url, fallback)
-        download_file(result_url, output_path, timeout=args.timeout)
-        output_paths.append(str(output_path))
         final_responses.append(
             {
                 "index": index,
@@ -153,6 +163,26 @@ def main() -> int:
                 "output_path": str(output_path),
             }
         )
+        response_data = (
+            final_responses[0]["final_response"]
+            if len(payloads) == 1
+            else {"segments": final_responses, "output_paths": output_paths}
+        )
+        write_json_file(args.response_output, response_data)
+
+        download_file(
+            result_url,
+            output_path,
+            timeout=args.timeout,
+            attempts=args.download_retries,
+            retry_interval=args.download_retry_interval,
+        )
+        output_paths.append(str(output_path))
+        if len(payloads) > 1:
+            write_json_file(
+                args.response_output,
+                {"segments": final_responses, "output_paths": output_paths},
+            )
         print(f"已下载第 {index} 段视频文件: {output_path}")
 
     response_data = (
